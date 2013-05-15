@@ -1,4 +1,5 @@
 from datetime import datetime
+from copy import copy
 
 from django.contrib.contenttypes import generic
 from django.contrib.contenttypes.models import ContentType
@@ -9,6 +10,7 @@ from django_statemodel.signals import save_timestamp_cache, set_default_state
 
 
 OPTIONS_CLASS = "StateModelMeta"
+OPTIONS_ATTR_NAME = "_statemodelmeta"
 
 
 class StateModelBase(models.base.ModelBase):
@@ -18,25 +20,31 @@ class StateModelBase(models.base.ModelBase):
 
         # Get the field name for state from the meta options
         state_field_name = options.get('state_field_name', 'state')
+        state_timestamps_field_name = options.get('state_timestamps_field_name',
+                                                  'state_timestamps')
 
         # state_map contains the mapping of states values to their attribute
         # names.
         state_map = options.get('state_map', [])
+        default_state = options.get('default_state')
+        add_states_to_model = options.get('add_states_to_model', True)
 
         if state_map:
             # default_state is either the first state in the map, or as
             # overridden
-            default_state = options.get('default_state')
             if default_state is None:
                 default_state = state_map[0][0]
 
             # Assign the states as attributes to the model
-            if options.get('add_states_to_model', True):
+            if add_states_to_model:
                 for key, value in state_map:
                     attrs[value] = key
 
         # db_index boolean to add an index to the state field. Defaults to True
         db_index = options.get('db_index', True)
+
+        # Check if we should store the timestamp as utc
+        use_utc = options.get('use_utc', True)
 
         # Get a Django field from the given model's _meta object
         def get_field(model, field):
@@ -59,12 +67,21 @@ class StateModelBase(models.base.ModelBase):
 
         # If this model is abstract and the state field isn't inherited, add it
         if is_abstract_model and not parent_has_state:
-            attrs['state'] = models.IntegerField("State", null=True,
-                                                 db_index=db_index)
-
-        #TODO: build 'options' meta object
+            attrs[state_field_name] = models.IntegerField(null=True,
+                                                          db_index=db_index)
+            attrs[state_timestamps_field_name] = generic.GenericRelation(
+                                            StateTransitionTimestamp,
+                                            content_type_field='content_type',
+                                            object_id_field='content_id')
 
         cls = super(StateModelBase, mcs).__new__(mcs, name, bases, attrs)
+
+        # Save the options for this model in an object attached to the model
+        options_cache = StateModelBase.StateModelOptions(
+                    state_map, default_state, use_utc, db_index,
+                    add_states_to_model, state_field_name,
+                    state_timestamps_field_name)
+        setattr(cls, OPTIONS_ATTR_NAME, options_cache)
 
         # Add signals to the inheriting models to save the state transitions
         if not is_abstract_model:
@@ -86,8 +103,19 @@ class StateModelBase(models.base.ModelBase):
                     curry(cls._get_FIELD_display, field=state_field))
         return cls
 
-    def _build_options(self, state_map, default_state, db_index):
-        pass
+    class StateModelOptions(object):
+        def __init__(self, state_map, default_state, use_utc, db_index,
+                     add_states_to_model, state_field_name,
+                     state_timestamps_field_name):
+            self.state_map = copy(state_map)
+            self.default_state = default_state
+            self.use_utc = use_utc
+            self.db_index = db_index
+            self.add_states_to_model = add_states_to_model
+            self.state_field_name = state_field_name
+            self.state_timestamps_field_name = state_timestamps_field_name
+            self.state_timestamps_cache_name = \
+                                    "%s_cache" % state_timestamps_field_name
 
 
 class StateTransitionTimestamp(models.Model):
@@ -96,7 +124,7 @@ class StateTransitionTimestamp(models.Model):
                 null=False,
                 help_text="The state of this transition")
 
-    utc_state_time = models.DateTimeField(
+    state_time = models.DateTimeField(
                 blank=False,
                 null=False,
                 default=datetime.utcnow,
@@ -117,7 +145,7 @@ class StateTransitionTimestamp(models.Model):
                 fk_field="content_id")
 
     def __unicode__(self):
-        return "%s: %s" % (self.state, self.utc_state_time)
+        return "%s: %s" % (self.state, self.state_time)
 
 
 class StateModel(models.Model):
@@ -126,14 +154,36 @@ class StateModel(models.Model):
     class Meta:
         abstract = True
 
-    statetimestamps = generic.GenericRelation(
-                StateTransitionTimestamp,
-                content_type_field='content_type',
-                object_id_field='content_id')
-
     def __setattr__(self, key, value):
-        # TODO: Add 'state' name to meta object and lookup here
-        if key == "state":
-            self.setState(value, save=False)
+        meta_options = getattr(self, OPTIONS_ATTR_NAME)
+        # Check if we are setting the "state" field
+        if key == meta_options.state_field_name:
+            # Value can be a tuple of (<state>, <datetime object>)
+            if isinstance(value, (tuple, list)):
+                if len(value) != 2 or not isinstance(datetime, value[1]):
+                    raise ValueError("'%s' must be in the format: <state> or "
+                                     "(<state>, <datetime>)"
+                                     % meta_options.state_field_name)
+
+                timestamp = value[1]
+                value = value[0]
+            else:
+                # If no timestamp is given, set it to now
+                timestamp = datetime.utcnow() if meta_options.use_utc else \
+                            datetime.now()
+
+            if value is None or value not in meta_options.state_map:
+                raise ValueError("The given state '%s' is not a valid state "
+                                 "listed in the statemap: '%s'"
+                                 % (value, meta_options.state_map))
+
+            # Don't update the state's timestamp if the state hasn't changed.
+            if value != getattr(self, meta_options.state_field_name):
+                # We store the timestamp in a cache until the model is saved.
+                # This way, we only update the state_timestamps once per save.
+                setattr(self,
+                        meta_options.state_timestamps_cache_name,
+                        StateTransitionTimestamp(state=value,
+                                                 state_time=timestamp))
+
         super(StateModel, self).__setattr__(key, value)
-        print "Setattr", key, value

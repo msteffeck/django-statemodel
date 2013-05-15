@@ -1,10 +1,13 @@
-
+from .statemodel import OPTIONS_ATTR_NAME
 
 def save_timestamp_cache(sender, instance, **kwargs):
     """Save the StateTransitionTimestamp if there is one"""
-    if instance._state_transition_cache:
-        instance._state_transition_cache.content = instance
-        instance._state_transition_cache.save()
+    meta_options = getattr(instance, OPTIONS_ATTR_NAME)
+    state_timestamp_cache = getattr(
+                instance, "%s_cache" % meta_options.state_timestamps_field_name)
+    if state_timestamp_cache:
+        state_timestamp_cache.content = instance
+        state_timestamp_cache.save()
 
 
 def set_default_state(sender, instance, **kwargs):
