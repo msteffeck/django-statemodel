@@ -11,12 +11,17 @@ from django_statemodel.signals import save_timestamp_cache, set_default_state
 
 OPTIONS_CLASS = "StateModelMeta"
 OPTIONS_ATTR_NAME = "_statemodelmeta"
+DONE_INITIALIZING = "_statemodel_done_initializing"
 
 
 class StateModelBase(models.base.ModelBase):
     def __new__(mcs, name, bases, attrs):
         # Look at Options for information about the StateModel states
-        options = attrs.pop(OPTIONS_CLASS, {})
+        options = attrs.pop(OPTIONS_CLASS, None)
+        if options is None:
+            options = {}
+        else:
+            options = options.__dict__
 
         # Get the field name for state from the meta options
         state_field_name = options.get('state_field_name', 'state')
@@ -45,6 +50,13 @@ class StateModelBase(models.base.ModelBase):
 
         # Check if we should store the timestamp as utc
         use_utc = options.get('use_utc', True)
+
+        # Check if we allow None states
+        allow_none_state = options.get('allow_none_state', True)
+        if not allow_none_state and default_state is None:
+            raise ValueError("'allow_none_state' cannot be False while "
+                             "'default_state' is set to None or 'state_map' "
+                             "is undefined.")
 
         # Get a Django field from the given model's _meta object
         def get_field(model, field):
@@ -78,8 +90,8 @@ class StateModelBase(models.base.ModelBase):
 
         # Save the options for this model in an object attached to the model
         options_cache = StateModelBase.StateModelOptions(
-                    state_map, default_state, use_utc, db_index,
-                    add_states_to_model, state_field_name,
+                    dict(state_map), default_state, use_utc, allow_none_state,
+                    db_index, add_states_to_model, state_field_name,
                     state_timestamps_field_name)
         setattr(cls, OPTIONS_ATTR_NAME, options_cache)
 
@@ -94,22 +106,22 @@ class StateModelBase(models.base.ModelBase):
         if state_map and state_field:
             # Set up the choices on the state field
             state_field._choices = state_map
-            # state_field.default = state_map[0][0]
 
             # Add in the django 'get_<field>_display' method. This is done
             # in the django metaclass, which has run already, but needs choices
             # to work.
-            setattr(cls, 'get_%s_display' % state_field.name,
+            setattr(cls, 'get_%s_display' % state_field.attname,
                     curry(cls._get_FIELD_display, field=state_field))
         return cls
 
     class StateModelOptions(object):
-        def __init__(self, state_map, default_state, use_utc, db_index,
-                     add_states_to_model, state_field_name,
+        def __init__(self, state_map, default_state, use_utc, allow_none_state,
+                     db_index, add_states_to_model, state_field_name,
                      state_timestamps_field_name):
             self.state_map = copy(state_map)
             self.default_state = default_state
             self.use_utc = use_utc
+            self.allow_none_state = allow_none_state
             self.db_index = db_index
             self.add_states_to_model = add_states_to_model
             self.state_field_name = state_field_name
@@ -133,8 +145,7 @@ class StateTransitionTimestamp(models.Model):
     content_type = models.ForeignKey(
                 ContentType,
                 blank=True,
-                null=True,
-                related_name="statetransitiontimestamp_object")
+                null=True)
 
     content_id = models.PositiveIntegerField(
                 blank=False,
@@ -156,8 +167,10 @@ class StateModel(models.Model):
 
     def __setattr__(self, key, value):
         meta_options = getattr(self, OPTIONS_ATTR_NAME)
-        # Check if we are setting the "state" field
-        if key == meta_options.state_field_name:
+        # Check if we are setting the "state" field and that we are done
+        # initializing. Done initializing means the __init__ is finished.
+        if key == meta_options.state_field_name and \
+                getattr(self, DONE_INITIALIZING, False):
             # Value can be a tuple of (<state>, <datetime object>)
             if isinstance(value, (tuple, list)):
                 if len(value) != 2 or not isinstance(datetime, value[1]):
@@ -172,9 +185,13 @@ class StateModel(models.Model):
                 timestamp = datetime.utcnow() if meta_options.use_utc else \
                             datetime.now()
 
-            if value is None or value not in meta_options.state_map:
+            if not meta_options.allow_none_state and value is None:
+                raise ValueError("The given state value is None, and None "
+                                 "states are not allowed.")
+
+            if value not in meta_options.state_map and value is not None:
                 raise ValueError("The given state '%s' is not a valid state "
-                                 "listed in the statemap: '%s'"
+                                 "listed in the statemap: '%s'."
                                  % (value, meta_options.state_map))
 
             # Don't update the state's timestamp if the state hasn't changed.
