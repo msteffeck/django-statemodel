@@ -17,20 +17,16 @@ def save_timestamp_cache(sender, instance, **kwargs):
         # Get the field where we store the state timestamps
         state_timestamps = getattr(instance,
                                    meta_options.state_timestamps_field_name)
-        # Get the state field value
-        state = str(getattr(instance, meta_options.state_field_name))
-        # The list of timestamps for a state
-        state_ts_list = state_timestamps.get(state)
 
         # If the timestamp list is empty or missing, create it. Otherwise
         # append the new timestamp to the list
-        if not isinstance(state_ts_list, list):
-            state_ts_list = [state_timestamp_cache]
+        if not isinstance(state_timestamps, list):
+            setattr(instance,
+                    meta_options.state_timestamps_field_name,
+                    [state_timestamp_cache])
         else:
-            state_ts_list.append(state_timestamp_cache)
+            state_timestamps.append(state_timestamp_cache)
 
-        # Add the updated list back to the dict of states
-        state_timestamps[state] = state_ts_list
         # Clear the cache
         setattr(instance, meta_options.state_timestamps_cache_name, None)
 

@@ -2,7 +2,7 @@ from datetime import datetime
 from copy import copy
 
 from django.db import models
-from djangotoolbox.fields import DictField, ListField
+from djangotoolbox.fields import ListField, EmbeddedModelField
 
 from django_statemodel.signals import save_timestamp_cache, set_default_state
 
@@ -82,8 +82,8 @@ class StateModelBase(models.base.ModelBase):
                                                           db_index=db_index,
                                                           choices=state_map)
             attrs[state_timestamps_field_name] = \
-                        DictField(ListField(models.DateTimeField()),
-                                  default={},
+                        ListField(EmbeddedModelField(StateTransitionTimestamp),
+                                  default=[],
                                   blank=True)
 
             # Save the options for this model in an object attached to the model
@@ -128,6 +128,22 @@ class StateModelBase(models.base.ModelBase):
                                     "_%s_cache" % state_timestamps_field_name
 
 
+class StateTransitionTimestamp(models.Model):
+    state = models.IntegerField(
+        blank=False,
+        null=False,
+        help_text="The state of this transition")
+
+    state_time = models.DateTimeField(
+        blank=False,
+        null=False,
+        default=datetime.utcnow,
+        help_text="The time this state was entered")
+
+    def __unicode__(self):
+        return "%s: %s" % (self.state, self.state_time)
+
+
 class StateModel(models.Model):
     __metaclass__ = StateModelBase
 
@@ -167,7 +183,10 @@ class StateModel(models.Model):
             if value != getattr(self, meta_options.state_field_name):
                 # We store the timestamp in a cache until the model is saved.
                 # This way, we only update the state_timestamps once per save.
+                state_transition = StateTransitionTimestamp(
+                                        state=value, state_time=timestamp)
                 setattr(self,
-                        meta_options.state_timestamps_cache_name, timestamp)
+                        meta_options.state_timestamps_cache_name,
+                        state_transition)
 
         super(StateModel, self).__setattr__(key, value)
