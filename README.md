@@ -58,7 +58,7 @@ print e.state_timestamps
 []
 ```
 
-Notice, in the code above, the `state_timestamps` are empty. Timestamps are stored
+Notice, in the code above, the `state_timestamps` field is empty. Timestamps are stored
 in a cache field and saved when the model is saved. This is to ensure only the
 final state-transition is saved (in case the state is switched before saving).
 See example below:
