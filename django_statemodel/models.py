@@ -158,7 +158,7 @@ class StateModel(models.Model):
                 getattr(self, DONE_INITIALIZING, False):
             # Value can be a tuple of (<state>, <datetime object>)
             if isinstance(value, (tuple, list)):
-                if len(value) != 2 or not isinstance(datetime, value[1]):
+                if len(value) != 2 or not isinstance(value[1], datetime):
                     raise ValueError("'%s' must be in the format: <state> or "
                                      "(<state>, <datetime>)"
                                      % meta_options.state_field_name)
