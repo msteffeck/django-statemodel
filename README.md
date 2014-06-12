@@ -35,7 +35,7 @@ from django_statemodel.models import StateModel
 
 class Email(StateModel):
     class StateModelMeta:
-        state_map = (       # Not required, but not very useful without
+        state_map = (
             (1, "Created"),
             (2, "Sent"),
             (3, "Opened"),
