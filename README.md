@@ -20,7 +20,7 @@ There are two versions of this project:
 ## Installation
 
 ##### For the mongodb version:
-pip install git+git://github.com/MobileSpinach/django-statemodel@mongodb
+pip install git+git://github.com/msteffeck/django-statemodel@mongodb
 
 
 ## Basic Usage
